@@ -1,0 +1,25 @@
+# This file stores configurations for your Shopify app.
+
+client_id = "008f2b9186c689836aeb64a8a1a3f4e3"
+name = "TCB Subscription Sync"
+application_url = "https://localhost:3000"
+embedded = true
+
+[access_scopes]
+scopes = "read_products,read_customers,read_orders"
+
+[auth]
+redirect_urls = [
+  "https://localhost:3000/auth/callback",
+  "https://localhost:3000/auth/shopify/callback",
+  "https://localhost:3000/api/auth/callback"
+]
+
+[webhooks]
+api_version = "2024-04"
+
+[pos]
+embedded = false
+
+[build]
+automatically_update_urls_on_dev = true

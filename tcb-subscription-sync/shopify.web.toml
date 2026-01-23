@@ -1,0 +1,5 @@
+type = "frontend"
+
+[commands]
+dev = "npm exec remix vite:dev"
+build = "npm run build"
