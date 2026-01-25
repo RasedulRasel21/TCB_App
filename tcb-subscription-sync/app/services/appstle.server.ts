@@ -11,13 +11,18 @@ export interface AppstleConfig {
 }
 
 export interface SubscriptionContract {
-  id: string;
-  contractId: string;
+  // Appstle internal ID (e.g., 9048848)
+  id: number | string;
+  // Appstle subscription contract ID (e.g., 120951144534)
+  subscriptionContractId?: number | string;
+  contractId?: string;
+  graphSubscriptionContractId?: string;
   status: string;
-  customerId: string;
+  customerId: number | string;
   customerEmail?: string;
   customerFirstName?: string;
   customerLastName?: string;
+  customerName?: string;
   billingPolicy?: {
     interval: string;
     intervalCount: number;
@@ -27,16 +32,20 @@ export interface SubscriptionContract {
     intervalCount: number;
   };
   nextBillingDate?: string;
-  createdAt: string;
-  orderCount: number;
-  totalOrdersDelivered: number;
-  lineItems?: Array<{
-    id: string;
-    title: string;
-    quantity: number;
-    price: string;
-    variantId: string;
-  }>;
+  createdAt?: string;
+  // Order tracking fields
+  totalSuccessfulOrders?: number; // THIS is the actual order count!
+  currentBillingCycle?: number;
+  billingCycleCount?: number;
+  orderCount?: number;
+  totalOrdersDelivered?: number;
+  orderName?: string; // First/initial order ID like "#1005"
+  orderId?: number | string;
+  // Last successful order info (JSON string)
+  lastSuccessfulOrder?: string;
+  lifetimeValue?: number;
+  // Additional fields from API
+  contractDetailsJSON?: string;
 }
 
 export interface SubscriptionContractsResponse {
@@ -198,13 +207,15 @@ export class AppstleService {
 
   /**
    * Filter subscription contracts by minimum orders delivered
+   * Uses totalSuccessfulOrders as the primary order count
    */
   filterByMinOrders(
     contracts: SubscriptionContract[],
     minOrders: number
   ): SubscriptionContract[] {
     return contracts.filter((contract) => {
-      const ordersDelivered = contract.totalOrdersDelivered || contract.orderCount || 0;
+      // totalSuccessfulOrders is the actual number of successful orders
+      const ordersDelivered = contract.totalSuccessfulOrders || 0;
       return ordersDelivered >= minOrders;
     });
   }
@@ -260,6 +271,109 @@ export class AppstleService {
   }
 
   /**
+   * Get order history for a subscription contract
+   * Returns the list of orders and count
+   */
+  async getSubscriptionOrders(subscriptionContractId: string): Promise<{
+    orders: Array<{
+      orderId: string;
+      orderName: string;
+      createdAt: string;
+      status: string;
+    }>;
+    totalCount: number;
+    lastOrder?: {
+      orderId: string;
+      orderName: string;
+      createdAt: string;
+    };
+  }> {
+    // Try multiple endpoint formats
+    const endpoints = [
+      `/api/external/v2/subscription-contract-orders?subscriptionContractId=${subscriptionContractId}`,
+      `/api/external/v2/subscription-contracts/${subscriptionContractId}/orders`,
+      `/api/external/v2/subscription-contract/${subscriptionContractId}/orders`,
+    ];
+
+    for (const endpoint of endpoints) {
+      try {
+        console.log(`Trying endpoint: ${endpoint}`);
+        const response = await this.makeRequest<{
+          content?: Array<{
+            orderId?: string | number;
+            orderName?: string;
+            createdAt?: string;
+            status?: string;
+          }>;
+          orders?: Array<{
+            orderId?: string | number;
+            orderName?: string;
+            createdAt?: string;
+            status?: string;
+          }>;
+          totalElements?: number;
+          totalCount?: number;
+        }>(endpoint);
+
+        console.log(`Order response from ${endpoint}:`, JSON.stringify(response).substring(0, 500));
+
+        const orders = response.content || response.orders || [];
+        if (Array.isArray(response) && response.length > 0) {
+          // Response is array directly
+          const directOrders = response as Array<{
+            orderId?: string | number;
+            orderName?: string;
+            createdAt?: string;
+            status?: string;
+          }>;
+          const totalCount = directOrders.length;
+          const formattedOrders = directOrders.map(o => ({
+            orderId: String(o.orderId || ''),
+            orderName: o.orderName || '',
+            createdAt: o.createdAt || '',
+            status: o.status || 'unknown',
+          }));
+          const sortedOrders = [...formattedOrders].sort((a, b) =>
+            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+          );
+          return {
+            orders: formattedOrders,
+            totalCount,
+            lastOrder: sortedOrders[0] || undefined,
+          };
+        }
+
+        const totalCount = response.totalElements || response.totalCount || orders.length;
+
+        if (orders.length > 0 || totalCount > 0) {
+          const formattedOrders = orders.map(o => ({
+            orderId: String(o.orderId || ''),
+            orderName: o.orderName || '',
+            createdAt: o.createdAt || '',
+            status: o.status || 'unknown',
+          }));
+
+          const sortedOrders = [...formattedOrders].sort((a, b) =>
+            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+          );
+
+          return {
+            orders: formattedOrders,
+            totalCount,
+            lastOrder: sortedOrders[0] || undefined,
+          };
+        }
+      } catch (error) {
+        console.log(`Endpoint ${endpoint} failed:`, error);
+        continue;
+      }
+    }
+
+    console.error(`Could not fetch orders for contract ${subscriptionContractId} from any endpoint`);
+    return { orders: [], totalCount: 0 };
+  }
+
+  /**
    * Update subscription status
    */
   async updateSubscriptionStatus(
@@ -284,6 +398,117 @@ export class AppstleService {
         message: error instanceof Error ? error.message : "Failed to connect to Appstle API",
       };
     }
+  }
+
+  /**
+   * Add a one-time product to subscription as a free gift
+   * Uses the addLineItemV2_1 endpoint with price = 0
+   * Note: This endpoint uses PUT method with query parameters
+   */
+  async addGiftProduct(
+    contractId: string | number,
+    variantId: string,
+    quantity: number = 1
+  ): Promise<{
+    success: boolean;
+    lineId?: string;
+    error?: string;
+  }> {
+    try {
+      const params = new URLSearchParams({
+        contractId: String(contractId),
+        variantId: variantId,
+        quantity: String(quantity),
+        price: "0", // Free gift
+        isOneTimeProduct: "true", // One-time only
+      });
+
+      // Try PUT method first (as per Appstle API docs)
+      const endpoint = `/api/external/v2/add-line-item-with-custom-price?${params.toString()}`;
+
+      console.log(`Adding gift product to contract ${contractId}: variant ${variantId}`);
+      console.log(`Endpoint: ${endpoint}`);
+
+      const response = await this.makeRequest<{
+        id?: string;
+        lines?: {
+          edges?: Array<{
+            node?: {
+              id?: string;
+              variantId?: string;
+            };
+          }>;
+          nodes?: Array<{
+            id?: string;
+            variantId?: string;
+          }>;
+        };
+      }>(endpoint, { method: "PUT" });
+
+      console.log(`Appstle response:`, JSON.stringify(response).substring(0, 500));
+
+      // Find the newly added line
+      const edges = response.lines?.edges || [];
+      const nodes = response.lines?.nodes || [];
+
+      let lineId = response.id;
+
+      const addedEdge = edges.find(
+        (edge) => edge.node?.variantId?.includes(variantId)
+      );
+      if (addedEdge?.node?.id) {
+        lineId = addedEdge.node.id;
+      }
+
+      const addedNode = nodes.find(
+        (node) => node.variantId?.includes(variantId)
+      );
+      if (addedNode?.id) {
+        lineId = addedNode.id;
+      }
+
+      return {
+        success: true,
+        lineId: lineId,
+      };
+    } catch (error) {
+      console.error(`Error adding gift product to contract ${contractId}:`, error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Failed to add gift product",
+      };
+    }
+  }
+
+  /**
+   * Add multiple gift products to a subscription
+   */
+  async addGiftProducts(
+    contractId: string | number,
+    products: Array<{ variantId: string; quantity?: number }>
+  ): Promise<{
+    success: boolean;
+    results: Array<{ variantId: string; success: boolean; lineId?: string; error?: string }>;
+  }> {
+    const results: Array<{ variantId: string; success: boolean; lineId?: string; error?: string }> = [];
+
+    for (const product of products) {
+      const result = await this.addGiftProduct(
+        contractId,
+        product.variantId,
+        product.quantity || 1
+      );
+      results.push({
+        variantId: product.variantId,
+        ...result,
+      });
+
+      // Small delay between requests to avoid rate limiting
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+
+    const allSuccess = results.every((r) => r.success);
+    return { success: allSuccess, results };
   }
 }
 

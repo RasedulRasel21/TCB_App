@@ -75,6 +75,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       lastName: s.customerLastName,
       status: s.status,
       totalOrdersDelivered: s.totalOrdersDelivered,
+      lastOrderId: s.lastOrderId,
       nextBillingDate: s.nextBillingDate?.toISOString(),
     })),
     totalCount,
@@ -135,17 +136,66 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
       // Save filtered subscribers
       for (const contract of result.filteredSubscribers) {
+        // Use subscriptionContractId as main ID (e.g., 120951144534)
+        // Fall back to graphSubscriptionContractId or id
+        let subscriptionId = contract.subscriptionContractId;
+        if (!subscriptionId && contract.graphSubscriptionContractId) {
+          // Extract ID from gid://shopify/SubscriptionContract/120951144534
+          const match = contract.graphSubscriptionContractId.match(/\/(\d+)$/);
+          subscriptionId = match ? match[1] : contract.id;
+        }
+        if (!subscriptionId) {
+          subscriptionId = contract.contractId || contract.id;
+        }
+
+        // Cast to any to access all fields from the API response
+        const rawContract = contract as any;
+
+        // Use totalSuccessfulOrders as the order count - this is the correct field!
+        let orderCount = rawContract.totalSuccessfulOrders || 0;
+        let lastOrderId = rawContract.orderName || null;
+        let lastOrderDate: Date | null = null;
+
+        // Parse lastSuccessfulOrder to get the actual last order info
+        if (rawContract.lastSuccessfulOrder) {
+          try {
+            const lastOrder = typeof rawContract.lastSuccessfulOrder === 'string'
+              ? JSON.parse(rawContract.lastSuccessfulOrder)
+              : rawContract.lastSuccessfulOrder;
+            if (lastOrder.orderName) {
+              lastOrderId = lastOrder.orderName; // e.g., "#1007"
+            }
+            if (lastOrder.orderDate) {
+              lastOrderDate = new Date(lastOrder.orderDate);
+            }
+          } catch (e) {
+            console.log('Could not parse lastSuccessfulOrder:', e);
+          }
+        }
+
+
+        // Extract customer name parts if separate fields not available
+        let firstName = contract.customerFirstName;
+        let lastName = contract.customerLastName;
+        if (!firstName && !lastName && contract.customerName) {
+          const nameParts = contract.customerName.split(' ');
+          firstName = nameParts[0] || '';
+          lastName = nameParts.slice(1).join(' ') || '';
+        }
+
         await prisma.syncedSubscriber.create({
           data: {
             shop,
-            contractId: contract.contractId || contract.id,
-            customerId: contract.customerId,
+            contractId: String(subscriptionId),
+            appstleInternalId: String(contract.id),
+            customerId: String(contract.customerId),
             customerEmail: contract.customerEmail,
-            customerFirstName: contract.customerFirstName,
-            customerLastName: contract.customerLastName,
+            customerFirstName: firstName,
+            customerLastName: lastName,
             status: contract.status,
-            totalOrdersDelivered:
-              contract.totalOrdersDelivered || contract.orderCount || 0,
+            totalOrdersDelivered: orderCount,
+            lastOrderId: lastOrderId,
+            lastOrderDate: lastOrderDate,
             nextBillingDate: contract.nextBillingDate
               ? new Date(contract.nextBillingDate)
               : null,
@@ -261,6 +311,7 @@ export default function Subscribers() {
     sub.email || "N/A",
     getStatusBadge(sub.status),
     sub.totalOrdersDelivered.toString(),
+    sub.lastOrderId || "N/A",
     sub.nextBillingDate
       ? new Date(sub.nextBillingDate).toLocaleDateString()
       : "N/A",
@@ -297,15 +348,15 @@ export default function Subscribers() {
           </Banner>
         )}
 
-        {actionData?.success && actionData.message && (
+        {actionData?.success && (actionData as any).message && (
           <Banner tone="success" onDismiss={() => {}}>
-            <Text as="p">{actionData.message}</Text>
+            <Text as="p">{(actionData as any).message}</Text>
           </Banner>
         )}
 
-        {actionData?.error && (
+        {(actionData as any)?.error && (
           <Banner tone="critical" onDismiss={() => {}}>
-            <Text as="p">{actionData.error}</Text>
+            <Text as="p">{(actionData as any).error}</Text>
           </Banner>
         )}
 
@@ -417,13 +468,15 @@ export default function Subscribers() {
                         "text",
                         "numeric",
                         "text",
+                        "text",
                       ]}
                       headings={[
-                        "Contract ID",
+                        "Subscription ID",
                         "Customer Name",
                         "Email",
                         "Status",
-                        "Orders Delivered",
+                        "Orders",
+                        "Last Order",
                         "Next Billing",
                       ]}
                       rows={tableRows}

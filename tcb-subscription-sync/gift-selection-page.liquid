@@ -1,0 +1,492 @@
+{% comment %}
+  TCB Subscription Gift Selection Page
+
+  HOW TO USE:
+  1. In Shopify Admin, go to Online Store > Themes > Edit code
+  2. Under Templates, click "Add a new template"
+  3. Select "page" and name it "gift-selection"
+  4. Paste this entire code and save
+  5. Create a new Page in Shopify and assign this template
+
+  The gift link format will be: https://your-store.myshopify.com/pages/gift-selection?token=GIFT_TOKEN
+{% endcomment %}
+
+{% layout 'theme' %}
+
+<style>
+  .gift-selection-page {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 40px 20px;
+  }
+
+  .gift-header {
+    text-align: center;
+    margin-bottom: 40px;
+  }
+
+  .gift-header h1 {
+    font-size: 2.5rem;
+    margin-bottom: 10px;
+    color: #333;
+  }
+
+  .gift-header .subtitle {
+    font-size: 1.2rem;
+    color: #666;
+  }
+
+  .gift-counter {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 15px 30px;
+    border-radius: 50px;
+    display: inline-block;
+    margin: 20px 0;
+    font-size: 1.1rem;
+  }
+
+  .gift-counter strong {
+    font-size: 1.3rem;
+  }
+
+  .products-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 25px;
+    margin: 30px 0;
+  }
+
+  .product-card {
+    border: 2px solid #e5e5e5;
+    border-radius: 12px;
+    padding: 20px;
+    text-align: center;
+    transition: all 0.3s ease;
+    cursor: pointer;
+    position: relative;
+    background: white;
+  }
+
+  .product-card:hover {
+    border-color: #667eea;
+    box-shadow: 0 8px 25px rgba(102, 126, 234, 0.15);
+    transform: translateY(-3px);
+  }
+
+  .product-card.selected {
+    border-color: #667eea;
+    background: linear-gradient(135deg, rgba(102, 126, 234, 0.05) 0%, rgba(118, 75, 162, 0.05) 100%);
+  }
+
+  .product-card.selected::after {
+    content: "✓";
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    background: #667eea;
+    color: white;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+  }
+
+  .product-card.disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .product-card img {
+    width: 100%;
+    height: 200px;
+    object-fit: contain;
+    margin-bottom: 15px;
+    border-radius: 8px;
+  }
+
+  .product-card h3 {
+    font-size: 1rem;
+    margin: 10px 0;
+    color: #333;
+    min-height: 48px;
+  }
+
+  .product-card .price {
+    text-decoration: line-through;
+    color: #999;
+    font-size: 0.9rem;
+  }
+
+  .product-card .free-tag {
+    background: #10b981;
+    color: white;
+    padding: 5px 15px;
+    border-radius: 20px;
+    font-weight: bold;
+    font-size: 0.9rem;
+    display: inline-block;
+    margin-top: 5px;
+  }
+
+  .submit-section {
+    text-align: center;
+    margin-top: 40px;
+    padding: 30px;
+    background: #f8f9fa;
+    border-radius: 12px;
+  }
+
+  .submit-btn {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border: none;
+    padding: 18px 50px;
+    font-size: 1.2rem;
+    border-radius: 50px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    font-weight: bold;
+  }
+
+  .submit-btn:hover:not(:disabled) {
+    transform: scale(1.05);
+    box-shadow: 0 10px 30px rgba(102, 126, 234, 0.4);
+  }
+
+  .submit-btn:disabled {
+    background: #ccc;
+    cursor: not-allowed;
+  }
+
+  .error-message {
+    background: #fee2e2;
+    color: #dc2626;
+    padding: 20px;
+    border-radius: 8px;
+    text-align: center;
+    margin: 20px 0;
+  }
+
+  .success-message {
+    background: #d1fae5;
+    color: #059669;
+    padding: 30px;
+    border-radius: 12px;
+    text-align: center;
+    margin: 20px 0;
+  }
+
+  .success-message h2 {
+    margin-bottom: 10px;
+  }
+
+  .loading-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(255, 255, 255, 0.9);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    flex-direction: column;
+  }
+
+  .loading-overlay.hidden {
+    display: none;
+  }
+
+  .spinner {
+    width: 50px;
+    height: 50px;
+    border: 4px solid #e5e5e5;
+    border-top-color: #667eea;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  .variant-select {
+    margin-top: 10px;
+    padding: 8px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    width: 100%;
+    font-size: 0.9rem;
+  }
+</style>
+
+<div class="gift-selection-page">
+  <div id="loading-overlay" class="loading-overlay hidden">
+    <div class="spinner"></div>
+    <p style="margin-top: 20px; font-size: 1.1rem;">Adding your free gifts...</p>
+  </div>
+
+  <div class="gift-header">
+    <h1>🎁 Choose Your Free Gifts!</h1>
+    <p class="subtitle">Thank you for being a loyal subscriber! Select your free products below.</p>
+    <div class="gift-counter">
+      Selected: <strong><span id="selected-count">0</span> / <span id="max-gifts">3</span></strong> products
+    </div>
+  </div>
+
+  <div id="error-container"></div>
+  <div id="success-container"></div>
+
+  <div id="products-container">
+    <div class="products-grid" id="products-grid">
+      <!-- Products will be loaded here -->
+      <p style="text-align: center; grid-column: 1/-1; padding: 40px;">Loading products...</p>
+    </div>
+  </div>
+
+  <div class="submit-section" id="submit-section">
+    <p style="margin-bottom: 15px; color: #666;">Select up to 3 products to add as free gifts to your next order</p>
+    <button class="submit-btn" id="submit-btn" disabled onclick="submitGiftSelection()">
+      Confirm My Free Gifts
+    </button>
+  </div>
+</div>
+
+<script>
+  const MAX_GIFTS = 3;
+  let selectedProducts = [];
+  let giftToken = '';
+
+  // IMPORTANT: Set your app URL here (get this from Shopify Partners > Apps > your app)
+  // This should be your app's tunnel URL when developing, or production URL when deployed
+  // NOTE: This URL changes each time you restart npm run dev - update it accordingly
+  const APP_URL = 'https://ready-samples-pursuant-lace.trycloudflare.com';
+
+  // Get token from URL
+  const urlParams = new URLSearchParams(window.location.search);
+  giftToken = urlParams.get('token');
+
+  document.addEventListener('DOMContentLoaded', function() {
+    if (!giftToken) {
+      showError('Invalid gift link. Please use the link from your email.');
+      document.getElementById('products-container').style.display = 'none';
+      document.getElementById('submit-section').style.display = 'none';
+      return;
+    }
+
+    // Load products directly (skip token verification for now - will verify on submit)
+    loadProducts();
+  });
+
+  async function verifyTokenAndLoadProducts() {
+    try {
+      // First verify the token via app proxy or direct URL
+      const verifyResponse = await fetch(`${APP_URL}/api/gift/verify?token=${giftToken}`);
+      const verifyData = await verifyResponse.json();
+
+      if (!verifyData.valid) {
+        showError(verifyData.message || 'This gift link is invalid or has expired.');
+        document.getElementById('products-container').style.display = 'none';
+        document.getElementById('submit-section').style.display = 'none';
+        return;
+      }
+
+      // Update max gifts from settings
+      if (verifyData.maxGifts) {
+        document.getElementById('max-gifts').textContent = verifyData.maxGifts;
+      }
+
+      // Load products
+      loadProducts(verifyData.eligibleProductIds);
+
+    } catch (error) {
+      console.error('Error verifying token:', error);
+      // Fall back to loading all products
+      loadProducts();
+    }
+  }
+
+  async function loadProducts(eligibleIds) {
+    try {
+      // Fetch products from Shopify
+      const response = await fetch('/products.json?limit=50');
+      const data = await response.json();
+
+      let products = data.products || [];
+
+      // Filter to eligible products if specified
+      if (eligibleIds && eligibleIds.length > 0) {
+        products = products.filter(p => eligibleIds.includes(String(p.id)));
+      }
+
+      renderProducts(products);
+
+    } catch (error) {
+      console.error('Error loading products:', error);
+      showError('Failed to load products. Please try again later.');
+    }
+  }
+
+  function renderProducts(products) {
+    const grid = document.getElementById('products-grid');
+
+    if (products.length === 0) {
+      grid.innerHTML = '<p style="text-align: center; grid-column: 1/-1; padding: 40px;">No products available for gifts at this time.</p>';
+      return;
+    }
+
+    grid.innerHTML = products.map(product => {
+      const variant = product.variants[0];
+      const image = product.images[0]?.src || 'https://via.placeholder.com/300x200?text=No+Image';
+      const hasVariants = product.variants.length > 1;
+
+      return `
+        <div class="product-card" data-product-id="${product.id}" data-variant-id="${variant.id}" onclick="toggleProduct(this)">
+          <img src="${image}" alt="${product.title}" loading="lazy">
+          <h3>${product.title}</h3>
+          <p class="price">Was $${parseFloat(variant.price).toFixed(2)}</p>
+          <span class="free-tag">FREE</span>
+          ${hasVariants ? `
+            <select class="variant-select" onclick="event.stopPropagation()" onchange="updateVariant(this, ${product.id})">
+              ${product.variants.map(v => `
+                <option value="${v.id}">${v.title} - $${parseFloat(v.price).toFixed(2)}</option>
+              `).join('')}
+            </select>
+          ` : ''}
+        </div>
+      `;
+    }).join('');
+  }
+
+  function toggleProduct(card) {
+    const variantId = card.dataset.variantId;
+    const productId = card.dataset.productId;
+
+    if (card.classList.contains('selected')) {
+      // Deselect
+      card.classList.remove('selected');
+      selectedProducts = selectedProducts.filter(p => p.productId !== productId);
+    } else {
+      // Check if max reached
+      if (selectedProducts.length >= MAX_GIFTS) {
+        alert(`You can only select up to ${MAX_GIFTS} free products.`);
+        return;
+      }
+      // Select
+      card.classList.add('selected');
+      selectedProducts.push({
+        productId: productId,
+        variantId: variantId,
+        title: card.querySelector('h3').textContent
+      });
+    }
+
+    updateUI();
+  }
+
+  function updateVariant(select, productId) {
+    const card = select.closest('.product-card');
+    card.dataset.variantId = select.value;
+
+    // Update selected products if this one is selected
+    const existing = selectedProducts.find(p => p.productId === String(productId));
+    if (existing) {
+      existing.variantId = select.value;
+    }
+  }
+
+  function updateUI() {
+    document.getElementById('selected-count').textContent = selectedProducts.length;
+    document.getElementById('submit-btn').disabled = selectedProducts.length === 0;
+
+    // Update card states
+    const cards = document.querySelectorAll('.product-card');
+    cards.forEach(card => {
+      if (selectedProducts.length >= MAX_GIFTS && !card.classList.contains('selected')) {
+        card.classList.add('disabled');
+      } else {
+        card.classList.remove('disabled');
+      }
+    });
+  }
+
+  async function submitGiftSelection() {
+    if (selectedProducts.length === 0) {
+      alert('Please select at least one product.');
+      return;
+    }
+
+    document.getElementById('loading-overlay').classList.remove('hidden');
+
+    // First test if app is reachable
+    try {
+      console.log('Testing app connectivity at:', `${APP_URL}/api/gift/ping`);
+      const pingResponse = await fetch(`${APP_URL}/api/gift/ping`, { mode: 'cors' });
+      const pingData = await pingResponse.json();
+      console.log('Ping response:', pingData);
+    } catch (pingError) {
+      console.error('App not reachable:', pingError);
+      document.getElementById('loading-overlay').classList.add('hidden');
+      showError(`Cannot reach app. Current APP_URL: ${APP_URL}. Please update APP_URL in the theme template to match your current tunnel URL.`);
+      return;
+    }
+
+    try {
+      const response = await fetch(`${APP_URL}/api/gift/select`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        mode: 'cors',
+        body: JSON.stringify({
+          token: giftToken,
+          products: selectedProducts.map(p => ({
+            variantId: p.variantId,
+            title: p.title
+          }))
+        })
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        showSuccess();
+      } else {
+        showError(result.error || 'Failed to process your gift selection. Please try again.');
+      }
+
+    } catch (error) {
+      console.error('Error submitting selection:', error);
+      console.error('APP_URL used:', APP_URL);
+      console.error('Full URL:', `${APP_URL}/api/gift/select`);
+      showError(`Network error: ${error.message}. APP_URL: ${APP_URL}. Check browser console for details.`);
+    } finally {
+      document.getElementById('loading-overlay').classList.add('hidden');
+    }
+  }
+
+  function showError(message) {
+    document.getElementById('error-container').innerHTML = `
+      <div class="error-message">
+        <strong>Oops!</strong> ${message}
+      </div>
+    `;
+  }
+
+  function showSuccess() {
+    document.getElementById('success-container').innerHTML = `
+      <div class="success-message">
+        <h2>🎉 Your Free Gifts Have Been Added!</h2>
+        <p>Your selected products will be included in your next subscription order at no extra charge.</p>
+        <p style="margin-top: 15px;">Thank you for being a valued subscriber!</p>
+      </div>
+    `;
+    document.getElementById('products-container').style.display = 'none';
+    document.getElementById('submit-section').style.display = 'none';
+  }
+</script>

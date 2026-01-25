@@ -67,7 +67,7 @@ export default function Index() {
         )}
 
         <Layout>
-          <Layout.Section variant="oneHalf">
+          <Layout.Section variant="oneThird">
             <Card>
               <BlockStack gap="400">
                 <Text as="h2" variant="headingMd">
@@ -88,7 +88,7 @@ export default function Index() {
             </Card>
           </Layout.Section>
 
-          <Layout.Section variant="oneHalf">
+          <Layout.Section variant="oneThird">
             <Card>
               <BlockStack gap="400">
                 <Text as="h2" variant="headingMd">
@@ -101,10 +101,7 @@ export default function Index() {
                       {new Date(lastSync.syncedAt).toLocaleString()}
                     </Text>
                     <Text as="p" variant="bodyMd">
-                      <strong>Subscribers Synced:</strong> {lastSync.totalSynced}
-                    </Text>
-                    <Text as="p" variant="bodyMd">
-                      <strong>Min Orders Filter:</strong> {lastSync.filterMinOrders}
+                      <strong>Synced:</strong> {lastSync.totalSynced}
                     </Text>
                     <Text as="p" variant="bodyMd">
                       <strong>Status:</strong>{" "}
@@ -118,7 +115,7 @@ export default function Index() {
                   </>
                 ) : (
                   <Text as="p" variant="bodyMd" tone="subdued">
-                    No sync has been performed yet
+                    No sync yet
                   </Text>
                 )}
                 <Box>
@@ -126,6 +123,24 @@ export default function Index() {
                     <Button variant="primary" disabled={!hasApiKey}>
                       Sync Now
                     </Button>
+                  </Link>
+                </Box>
+              </BlockStack>
+            </Card>
+          </Layout.Section>
+
+          <Layout.Section variant="oneThird">
+            <Card>
+              <BlockStack gap="400">
+                <Text as="h2" variant="headingMd">
+                  Gift Management
+                </Text>
+                <Text as="p" variant="bodyMd" tone="subdued">
+                  Reward loyal subscribers with free products on milestone orders
+                </Text>
+                <Box>
+                  <Link to="/app/gifts">
+                    <Button>Manage Gifts</Button>
                   </Link>
                 </Box>
               </BlockStack>

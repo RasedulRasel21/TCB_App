@@ -35,19 +35,22 @@ model AppSettings {
 }
 
 model SyncedSubscriber {
-  id                    String   @id @default(cuid())
-  shop                  String
-  contractId            String
-  customerId            String
-  customerEmail         String?
-  customerFirstName     String?
-  customerLastName      String?
-  status                String
-  totalOrdersDelivered  Int      @default(0)
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
-  nextBillingDate       DateTime?
-  subscriptionData      String?  // JSON string for additional data
+  id                      String   @id @default(cuid())
+  shop                    String
+  contractId              String   // Appstle subscription ID (e.g., 120951144534)
+  appstleInternalId       String?  // Appstle internal ID (e.g., 9048848)
+  customerId              String
+  customerEmail           String?
+  customerFirstName       String?
+  customerLastName        String?
+  status                  String
+  totalOrdersDelivered    Int      @default(0)
+  lastOrderId             String?  // Last Shopify order ID (e.g., #1007)
+  lastOrderDate           DateTime?
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+  nextBillingDate         DateTime?
+  subscriptionData        String?  // JSON string for additional data
 
   @@unique([shop, contractId])
   @@index([shop])
@@ -63,4 +66,62 @@ model SyncLog {
   filterMinOrders   Int
   status            String   // "success", "partial", "failed"
   errorMessage      String?
+}
+
+// Gift eligibility tracking
+model GiftEligibility {
+  id                    String    @id @default(cuid())
+  shop                  String
+  subscriptionContractId String   // Appstle subscription ID
+  customerId            String
+  customerEmail         String
+  customerName          String?
+  orderNumber           Int       // The order number that triggered eligibility (3, 5, 10, etc.)
+  giftToken             String    @unique // Secure token for gift selection link
+  status                String    @default("pending") // pending, email_sent, selected, applied, expired
+  emailSentAt           DateTime?
+  selectedAt            DateTime?
+  appliedAt             DateTime?
+  expiresAt             DateTime  // Gift link expires after certain time
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  selections            GiftSelection[]
+
+  @@unique([shop, subscriptionContractId, orderNumber])
+  @@index([shop])
+  @@index([giftToken])
+  @@index([status])
+}
+
+// Selected gift products
+model GiftSelection {
+  id                String   @id @default(cuid())
+  giftEligibilityId String
+  giftEligibility   GiftEligibility @relation(fields: [giftEligibilityId], references: [id], onDelete: Cascade)
+  variantId         String   // Shopify variant ID
+  productTitle      String
+  variantTitle      String?
+  quantity          Int      @default(1)
+  addedToSubscription Boolean @default(false)
+  appstleLineId     String?  // Line ID from Appstle after adding
+  createdAt         DateTime @default(now())
+
+  @@index([giftEligibilityId])
+}
+
+// Gift settings per shop
+model GiftSettings {
+  id                    String   @id @default(cuid())
+  shop                  String   @unique
+  enabled               Boolean  @default(true)
+  triggerOrderNumbers   String   @default("3,5,10,15,20") // Comma-separated order numbers
+  maxGiftProducts       Int      @default(3)
+  giftExpiryDays        Int      @default(14) // Days until gift link expires
+  emailDelayDays        Int      @default(7)  // Days to wait before sending email
+  eligibleProductIds    String?  // Comma-separated product IDs eligible as gifts (null = all products)
+  emailSubject          String   @default("🎁 You've earned free products on your next order!")
+  emailTemplate         String?  // Custom email HTML template
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
 }
