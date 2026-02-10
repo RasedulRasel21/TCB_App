@@ -8,6 +8,7 @@ import { prisma } from "../db.server";
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const url = new URL(request.url);
   const token = url.searchParams.get("token");
+  const email = url.searchParams.get("email");
 
   // CORS headers for cross-origin requests from storefront
   const headers = {
@@ -16,17 +17,45 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     "Access-Control-Allow-Headers": "Content-Type",
   };
 
-  if (!token) {
-    return json({ valid: false, message: "No token provided" }, { headers });
+  if (!token && !email) {
+    return json({ valid: false, message: "No token or email provided" }, { headers });
   }
 
   try {
-    const eligibility = await prisma.giftEligibility.findUnique({
-      where: { giftToken: token },
-      include: { selections: true },
-    });
+    // Look up by token or by email (find the latest pending/email_sent eligibility)
+    let eligibility;
+    if (token) {
+      eligibility = await prisma.giftEligibility.findUnique({
+        where: { giftToken: token },
+        include: { selections: true },
+      });
+    } else if (email) {
+      eligibility = await prisma.giftEligibility.findFirst({
+        where: {
+          customerEmail: email,
+          status: { in: ["pending", "email_sent"] },
+          expiresAt: { gt: new Date() },
+        },
+        orderBy: { createdAt: "desc" },
+        include: { selections: true },
+      });
+    }
 
     if (!eligibility) {
+      // If searched by email, check if there's an already-claimed one
+      if (email) {
+        const claimed = await prisma.giftEligibility.findFirst({
+          where: {
+            customerEmail: email,
+            status: { in: ["selected", "applied"] },
+          },
+          orderBy: { createdAt: "desc" },
+        });
+        if (claimed) {
+          return json({ valid: false, message: "You have already selected your free gifts for this milestone!" }, { headers });
+        }
+        return json({ valid: false, message: "No active gift found for this email. You may not be eligible yet, or your gift has expired." }, { headers });
+      }
       return json({ valid: false, message: "Invalid gift token" }, { headers });
     }
 
@@ -56,6 +85,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
     return json({
       valid: true,
+      token: eligibility.giftToken, // Return token so gift page can use it for selection
       customerName: eligibility.customerName,
       orderNumber: eligibility.orderNumber,
       maxGifts: settings?.maxGiftProducts || 3,

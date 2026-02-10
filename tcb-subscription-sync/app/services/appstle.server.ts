@@ -400,6 +400,119 @@ export class AppstleService {
   }
 
   /**
+   * Get past orders for a customer to check completed order count
+   * Uses GET /api/external/v2/subscription-billing-attempts/past-orders
+   */
+  async getPastOrders(
+    customerId: string,
+    page: number = 0,
+    size: number = 50
+  ): Promise<{
+    orders: Array<{
+      id?: string;
+      orderId?: string;
+      status?: string;
+      createdAt?: string;
+    }>;
+    totalSuccessOrders: number;
+  }> {
+    const pageable = JSON.stringify({ page, size });
+    const params = new URLSearchParams({
+      customerId,
+      pageable,
+    });
+
+    const endpoint = `/api/external/v2/subscription-billing-attempts/past-orders?${params.toString()}`;
+
+    try {
+      const response = await this.makeRequest<{
+        content?: Array<Record<string, unknown>>;
+        totalElements?: number;
+      } | Array<Record<string, unknown>>>(endpoint);
+
+      let orders: Array<Record<string, unknown>>;
+      let total: number;
+
+      if (Array.isArray(response)) {
+        orders = response;
+        total = orders.filter((o) => o.status === "SUCCESS").length;
+      } else {
+        orders = response.content || [];
+        total = response.totalElements || orders.length;
+      }
+
+      const successOrders = orders.filter((o) => o.status === "SUCCESS");
+
+      return {
+        orders: successOrders.map((o) => ({
+          id: String(o.id || ""),
+          orderId: String(o.orderId || ""),
+          status: String(o.status || ""),
+          createdAt: String(o.createdAt || ""),
+        })),
+        totalSuccessOrders: successOrders.length || total,
+      };
+    } catch (error) {
+      console.error("Error fetching past orders:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Send magic link email to customer for subscription portal access
+   * Uses GET /api/external/v2/subscription-contracts-email-magic-link
+   * The email template must be configured as SUBSCRIPTION_MANAGEMENT_LINK in Appstle dashboard
+   */
+  async sendMagicLinkEmail(customerEmail: string): Promise<{
+    success: boolean;
+    message: string;
+  }> {
+    const params = new URLSearchParams({ email: customerEmail });
+    const endpoint = `/api/external/v2/subscription-contracts-email-magic-link?${params.toString()}`;
+    const url = `${this.apiUrl}${endpoint}`;
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      "Accept": "application/json",
+      "X-API-Key": this.apiKey,
+      "X-Shopify-Shop-Domain": this.shopDomain,
+    };
+
+    try {
+      const response = await fetch(url, { headers });
+
+      console.log(`Magic link email API: ${response.status} for ${customerEmail}`);
+
+      // Any 2xx response means the API accepted the request - email was sent
+      if (response.ok) {
+        return {
+          success: true,
+          message: `Magic link email sent to ${customerEmail}`,
+        };
+      }
+
+      // 400 = template not enabled or customer has no subscriptions
+      if (response.status === 400) {
+        return {
+          success: false,
+          message: `Failed for ${customerEmail}: Ensure SUBSCRIPTION_MANAGEMENT_LINK template is enabled and customer has an active subscription.`,
+        };
+      }
+
+      return {
+        success: false,
+        message: `Failed for ${customerEmail}: HTTP ${response.status}`,
+      };
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : "Unknown error";
+      return {
+        success: false,
+        message: `Failed for ${customerEmail}: ${errMsg}`,
+      };
+    }
+  }
+
+  /**
    * Test API connection
    */
   async testConnection(): Promise<{ success: boolean; message: string }> {
@@ -651,85 +764,62 @@ export class AppstleService {
       errors.push('Subscription has no scheduled next order');
     }
 
-    const billingAttemptId = contractInfo.billingAttemptId;
-    const actualContractId = contractInfo.appstleInternalId || contractIdStr;
-    console.log(`Using contract ID: ${actualContractId}, billing attempt ID: ${billingAttemptId}`);
+    // Use the Shopify subscription contract ID (confirmed by Appstle support)
+    const actualContractId = contractInfo.subscriptionContractId || contractIdStr;
+    console.log(`Using contract ID: ${actualContractId}`);
 
-    // The correct endpoint from docs:
-    // PUT /api/external/v2/subscription-contract-one-offs-by-contractId-and-billing-attempt-id
-    const oneOffEndpoint = '/api/external/v2/subscription-contract-one-offs-by-contractId-and-billing-attempt-id';
+    // The correct endpoint confirmed by Appstle support:
+    // PUT /api/external/v2/subscription-contract-add-line-item
+    // Parameters: contractId, quantity, variantId, price, isOneTimeProduct=true
+    const addLineItemEndpoint = '/api/external/v2/subscription-contract-add-line-item';
 
-    // Prepare billing attempt IDs to try
-    // According to docs: "If invalid or not QUEUED, system uses next upcoming order"
-    const billingAttemptIds = billingAttemptId
-      ? [billingAttemptId]
-      : ['1'];  // Try a placeholder - API should auto-fallback
+    // Build the request parameters
+    const params = new URLSearchParams({
+      contractId: actualContractId,
+      quantity: String(quantity),
+      variantId: numericVariantId,
+      price: '0.00',  // Free gift - price is 0
+      isOneTimeProduct: 'true',
+    });
 
-    // Try with the actual Appstle internal ID found from the API
-    const contractIdsToTry = [actualContractId];
+    const fullEndpoint = `${addLineItemEndpoint}?${params.toString()}`;
+    console.log(`Calling Appstle API: PUT ${this.apiUrl}${fullEndpoint}`);
 
-    // Also try the Shopify subscription contract ID if different
-    if (contractInfo.subscriptionContractId && contractInfo.subscriptionContractId !== actualContractId) {
-      contractIdsToTry.push(contractInfo.subscriptionContractId);
-    }
+    try {
+      const response = await this.makeRequest<Record<string, unknown> | Array<Record<string, unknown>>>(
+        fullEndpoint,
+        { method: 'PUT' }
+      );
+      console.log(`Response:`, JSON.stringify(response));
 
-    // Variant handles to try - limited to reduce API calls
-    const variantHandlesToTry = [handle, 'default-title'];
+      // Handle array response
+      if (Array.isArray(response) && response.length > 0) {
+        console.log(`SUCCESS - Product added as one-time item`);
+        return { success: true, lineId: String(response[0].id || '') };
+      }
 
-    // Try combinations
-    for (const cid of contractIdsToTry) {
-      for (const attemptId of billingAttemptIds) {
-        for (const handleAttempt of variantHandlesToTry) {
-          const params = new URLSearchParams({
-            contractId: cid,
-            billingAttemptId: attemptId,
-            variantId: numericVariantId,
-            variantHandle: handleAttempt,
-            quantity: String(quantity),
-          });
-
-          const fullEndpoint = `${oneOffEndpoint}?${params.toString()}`;
-          console.log(`Trying: ${this.apiUrl}${fullEndpoint}`);
-
-          try {
-            const response = await this.makeRequest<Record<string, unknown> | Array<Record<string, unknown>>>(
-              fullEndpoint,
-              { method: 'PUT' }
-            );
-            console.log(`Response:`, JSON.stringify(response));
-
-            // Handle array response (API returns array on success)
-            if (Array.isArray(response) && response.length > 0) {
-              console.log(`SUCCESS with contractId=${cid}, billingAttemptId=${attemptId}, variantHandle=${handleAttempt}`);
-              return { success: true, lineId: String(response[0].id || '') };
-            }
-
-            // Handle empty array (might be success with idempotent call)
-            if (Array.isArray(response) && response.length === 0) {
-              console.log(`Empty array response - checking if this is success...`);
-              // Empty array might mean the product was already added (idempotent)
-              // Let's consider this a success
-              return { success: true, lineId: '' };
-            }
-
-            // Handle object response
-            if (response && typeof response === 'object' && !Array.isArray(response)) {
-              if (Object.keys(response).length > 0 && !response.error && !response.message?.toString().includes('error')) {
-                console.log(`SUCCESS with contractId=${cid}, billingAttemptId=${attemptId}, variantHandle=${handleAttempt}`);
-                return { success: true, lineId: String(response.id || '') };
-              }
-            }
-          } catch (error) {
-            const errMsg = error instanceof Error ? error.message : 'Request failed';
-            // Extract just the important part of the error
-            const shortErr = errMsg.includes('"detail"')
-              ? errMsg.match(/"detail"\s*:\s*"([^"]+)"/)?.[1] || errMsg.substring(0, 100)
-              : errMsg.substring(0, 100);
-            errors.push(`contractId=${cid}, billing=${attemptId}: ${shortErr}`);
-            console.log(`Failed: ${errMsg}`);
-          }
+      // Handle object response
+      if (response && typeof response === 'object' && !Array.isArray(response)) {
+        // Check for error in response
+        if (response.error || response.message?.toString().toLowerCase().includes('error')) {
+          const errorMsg = response.error || response.message || 'Unknown error';
+          errors.push(`API returned error: ${errorMsg}`);
+        } else if (Object.keys(response).length > 0) {
+          console.log(`SUCCESS - Product added as one-time item`);
+          return { success: true, lineId: String(response.id || response.lineId || '') };
         }
       }
+
+      // Empty response might indicate success
+      if (response && Object.keys(response).length === 0) {
+        console.log(`Empty response - assuming success`);
+        return { success: true, lineId: '' };
+      }
+
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : 'Request failed';
+      console.error(`API call failed:`, errMsg);
+      errors.push(errMsg);
     }
 
     // If all attempts failed, return a user-friendly error

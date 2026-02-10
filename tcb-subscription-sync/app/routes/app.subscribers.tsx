@@ -8,14 +8,11 @@ import {
   useLoaderData,
   useNavigation,
   Form,
-  useSubmit,
 } from "@remix-run/react";
 import {
   Page,
   Layout,
   Card,
-  FormLayout,
-  TextField,
   Button,
   Banner,
   BlockStack,
@@ -24,29 +21,23 @@ import {
   DataTable,
   Badge,
   InlineStack,
-  Spinner,
   EmptyState,
-  Select,
 } from "@shopify/polaris";
-import { useState, useCallback } from "react";
 import { authenticate } from "../shopify.server";
 import { prisma } from "../db.server";
-import {
-  createAppstleService,
-  type SubscriptionContract,
-} from "../services/appstle.server";
+import { createAppstleService } from "../services/appstle.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
 
-  const url = new URL(request.url);
-  const page = parseInt(url.searchParams.get("page") || "1");
-  const pageSize = 20;
-
   const settings = await prisma.appSettings.findUnique({
     where: { shop },
   });
+
+  const url = new URL(request.url);
+  const page = parseInt(url.searchParams.get("page") || "1");
+  const pageSize = 20;
 
   const subscribers = await prisma.syncedSubscriber.findMany({
     where: { shop },
@@ -86,7 +77,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           syncedAt: lastSync.syncedAt.toISOString(),
           totalFetched: lastSync.totalFetched,
           totalSynced: lastSync.totalSynced,
-          filterMinOrders: lastSync.filterMinOrders,
         }
       : null,
   });
@@ -100,9 +90,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const intent = formData.get("intent");
 
   if (intent === "sync") {
-    const minOrders = parseInt((formData.get("minOrders") as string) || "0");
-    const statusFilter = formData.get("statusFilter") as string;
-
     const settings = await prisma.appSettings.findUnique({
       where: { shop },
     });
@@ -121,26 +108,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         settings.appstleApiUrl
       );
 
-      const statusFilterArray =
-        statusFilter && statusFilter !== "ALL" ? [statusFilter] : undefined;
-
       const result = await service.syncSubscribers({
-        minOrdersDelivered: minOrders,
-        status: statusFilterArray,
+        minOrdersDelivered: 3,
       });
 
-      // Clear existing synced subscribers for this shop
-      await prisma.syncedSubscriber.deleteMany({
-        where: { shop },
-      });
+      await prisma.syncedSubscriber.deleteMany({ where: { shop } });
 
-      // Save filtered subscribers
       for (const contract of result.filteredSubscribers) {
-        // Use subscriptionContractId as main ID (e.g., 120951144534)
-        // Fall back to graphSubscriptionContractId or id
         let subscriptionId = contract.subscriptionContractId;
         if (!subscriptionId && contract.graphSubscriptionContractId) {
-          // Extract ID from gid://shopify/SubscriptionContract/120951144534
           const match = contract.graphSubscriptionContractId.match(/\/(\d+)$/);
           subscriptionId = match ? match[1] : contract.id;
         }
@@ -148,39 +124,27 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           subscriptionId = contract.contractId || contract.id;
         }
 
-        // Cast to any to access all fields from the API response
         const rawContract = contract as any;
-
-        // Use totalSuccessfulOrders as the order count - this is the correct field!
-        let orderCount = rawContract.totalSuccessfulOrders || 0;
+        const orderCount = rawContract.totalSuccessfulOrders || 0;
         let lastOrderId = rawContract.orderName || null;
         let lastOrderDate: Date | null = null;
 
-        // Parse lastSuccessfulOrder to get the actual last order info
         if (rawContract.lastSuccessfulOrder) {
           try {
-            const lastOrder = typeof rawContract.lastSuccessfulOrder === 'string'
+            const lastOrder = typeof rawContract.lastSuccessfulOrder === "string"
               ? JSON.parse(rawContract.lastSuccessfulOrder)
               : rawContract.lastSuccessfulOrder;
-            if (lastOrder.orderName) {
-              lastOrderId = lastOrder.orderName; // e.g., "#1007"
-            }
-            if (lastOrder.orderDate) {
-              lastOrderDate = new Date(lastOrder.orderDate);
-            }
-          } catch (e) {
-            console.log('Could not parse lastSuccessfulOrder:', e);
-          }
+            if (lastOrder.orderName) lastOrderId = lastOrder.orderName;
+            if (lastOrder.orderDate) lastOrderDate = new Date(lastOrder.orderDate);
+          } catch {}
         }
 
-
-        // Extract customer name parts if separate fields not available
         let firstName = contract.customerFirstName;
         let lastName = contract.customerLastName;
         if (!firstName && !lastName && contract.customerName) {
-          const nameParts = contract.customerName.split(' ');
-          firstName = nameParts[0] || '';
-          lastName = nameParts.slice(1).join(' ') || '';
+          const nameParts = contract.customerName.split(" ");
+          firstName = nameParts[0] || "";
+          lastName = nameParts.slice(1).join(" ") || "";
         }
 
         await prisma.syncedSubscriber.create({
@@ -194,8 +158,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             customerLastName: lastName,
             status: contract.status,
             totalOrdersDelivered: orderCount,
-            lastOrderId: lastOrderId,
-            lastOrderDate: lastOrderDate,
+            lastOrderId,
+            lastOrderDate,
             nextBillingDate: contract.nextBillingDate
               ? new Date(contract.nextBillingDate)
               : null,
@@ -204,43 +168,23 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         });
       }
 
-      // Log the sync
       await prisma.syncLog.create({
         data: {
           shop,
           totalFetched: result.totalFetched,
           totalSynced: result.filteredSubscribers.length,
-          filterMinOrders: minOrders,
+          filterMinOrders: 3,
           status: "success",
         },
       });
 
       return json({
         success: true,
-        message: `Successfully synced ${result.filteredSubscribers.length} subscribers (${result.totalFetched} total fetched, filtered by ${minOrders}+ orders)`,
-        totalFetched: result.totalFetched,
-        totalSynced: result.filteredSubscribers.length,
+        message: `Synced ${result.filteredSubscribers.length} subscribers (${result.totalFetched} total fetched, filtered to 3+ orders)`,
       });
     } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : "Unknown error occurred";
-
-      // Log the failed sync
-      await prisma.syncLog.create({
-        data: {
-          shop,
-          totalFetched: 0,
-          totalSynced: 0,
-          filterMinOrders: minOrders,
-          status: "failed",
-          errorMessage,
-        },
-      });
-
-      return json({
-        success: false,
-        error: `Sync failed: ${errorMessage}`,
-      });
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      return json({ success: false, error: `Sync failed: ${errorMessage}` });
     }
   }
 
@@ -269,28 +213,7 @@ export default function Subscribers() {
   } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
-  const submit = useSubmit();
-
-  const [minOrders, setMinOrders] = useState("0");
-  const [statusFilter, setStatusFilter] = useState("ALL");
-
   const isSubmitting = navigation.state === "submitting";
-
-  const handleMinOrdersChange = useCallback(
-    (value: string) => setMinOrders(value),
-    []
-  );
-  const handleStatusChange = useCallback(
-    (value: string) => setStatusFilter(value),
-    []
-  );
-
-  const statusOptions = [
-    { label: "All Statuses", value: "ALL" },
-    { label: "Active", value: "ACTIVE" },
-    { label: "Paused", value: "PAUSED" },
-    { label: "Cancelled", value: "CANCELLED" },
-  ];
 
   const getStatusBadge = (status: string) => {
     switch (status.toUpperCase()) {
@@ -321,33 +244,8 @@ export default function Subscribers() {
     <Page
       title="Subscribers"
       backAction={{ content: "Home", url: "/app" }}
-      primaryAction={{
-        content: "Sync Subscribers",
-        disabled: !hasApiKey || isSubmitting,
-        loading: isSubmitting,
-        onAction: () => {
-          const formData = new FormData();
-          formData.append("intent", "sync");
-          formData.append("minOrders", minOrders);
-          formData.append("statusFilter", statusFilter);
-          submit(formData, { method: "post" });
-        },
-      }}
     >
       <BlockStack gap="500">
-        {!hasApiKey && (
-          <Banner
-            title="API Key Required"
-            tone="warning"
-            action={{ content: "Go to Settings", url: "/app/settings" }}
-          >
-            <Text as="p">
-              Please configure your Appstle API key in Settings before syncing
-              subscribers.
-            </Text>
-          </Banner>
-        )}
-
         {actionData?.success && (actionData as any).message && (
           <Banner tone="success" onDismiss={() => {}}>
             <Text as="p">{(actionData as any).message}</Text>
@@ -360,80 +258,45 @@ export default function Subscribers() {
           </Banner>
         )}
 
+        <Banner tone="info">
+          <Text as="p">
+            Subscribers sync automatically every 6 hours via cron. Only subscribers with 3+ completed orders are synced.
+            Use "Sync Now" to trigger a manual sync.
+          </Text>
+        </Banner>
+
+        <Card>
+          <InlineStack align="space-between" blockAlign="center">
+            <BlockStack gap="100">
+              <Text as="h2" variant="headingMd">Manual Sync</Text>
+              <Text as="p" variant="bodySm" tone="subdued">
+                Fetch subscribers with 3+ orders from Appstle
+              </Text>
+            </BlockStack>
+            <Form method="post">
+              <input type="hidden" name="intent" value="sync" />
+              <Button submit variant="primary" disabled={!hasApiKey || isSubmitting} loading={isSubmitting}>
+                Sync Now
+              </Button>
+            </Form>
+          </InlineStack>
+        </Card>
+
+        {lastSync && (
+          <Card>
+            <BlockStack gap="200">
+              <Text as="h2" variant="headingMd">Last Sync</Text>
+              <Text as="p" variant="bodySm">
+                Date: {new Date(lastSync.syncedAt).toLocaleString()}
+              </Text>
+              <Text as="p" variant="bodySm">
+                Fetched: {lastSync.totalFetched} | Synced: {lastSync.totalSynced}
+              </Text>
+            </BlockStack>
+          </Card>
+        )}
+
         <Layout>
-          <Layout.Section variant="oneThird">
-            <Card>
-              <BlockStack gap="400">
-                <Text as="h2" variant="headingMd">
-                  Sync Filters
-                </Text>
-
-                <FormLayout>
-                  <TextField
-                    label="Minimum Orders Delivered"
-                    type="number"
-                    value={minOrders}
-                    onChange={handleMinOrdersChange}
-                    helpText="Only sync subscribers with at least this many orders delivered"
-                    min={0}
-                    autoComplete="off"
-                  />
-
-                  <Select
-                    label="Subscription Status"
-                    options={statusOptions}
-                    value={statusFilter}
-                    onChange={handleStatusChange}
-                    helpText="Filter by subscription status"
-                  />
-                </FormLayout>
-
-                <Box>
-                  <Form method="post">
-                    <input type="hidden" name="intent" value="sync" />
-                    <input type="hidden" name="minOrders" value={minOrders} />
-                    <input type="hidden" name="statusFilter" value={statusFilter} />
-                    <Button
-                      submit
-                      variant="primary"
-                      disabled={!hasApiKey || isSubmitting}
-                      loading={isSubmitting}
-                      fullWidth
-                    >
-                      {isSubmitting ? "Syncing..." : "Sync Subscribers"}
-                    </Button>
-                  </Form>
-                </Box>
-
-                {lastSync && (
-                  <Box
-                    background="bg-surface-secondary"
-                    padding="300"
-                    borderRadius="200"
-                  >
-                    <BlockStack gap="200">
-                      <Text as="p" variant="bodySm" fontWeight="semibold">
-                        Last Sync Info
-                      </Text>
-                      <Text as="p" variant="bodySm">
-                        Date: {new Date(lastSync.syncedAt).toLocaleString()}
-                      </Text>
-                      <Text as="p" variant="bodySm">
-                        Fetched: {lastSync.totalFetched}
-                      </Text>
-                      <Text as="p" variant="bodySm">
-                        Synced: {lastSync.totalSynced}
-                      </Text>
-                      <Text as="p" variant="bodySm">
-                        Min Orders Filter: {lastSync.filterMinOrders}
-                      </Text>
-                    </BlockStack>
-                  </Box>
-                )}
-              </BlockStack>
-            </Card>
-          </Layout.Section>
-
           <Layout.Section>
             <Card>
               <BlockStack gap="400">
@@ -454,8 +317,7 @@ export default function Subscribers() {
                 {isSubmitting ? (
                   <Box padding="800">
                     <InlineStack align="center" gap="200">
-                      <Spinner size="small" />
-                      <Text as="p">Syncing subscribers from Appstle...</Text>
+                      <Text as="p">Processing...</Text>
                     </InlineStack>
                   </Box>
                 ) : subscribers.length > 0 ? (
@@ -508,8 +370,7 @@ export default function Subscribers() {
                     image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
                   >
                     <Text as="p" variant="bodyMd">
-                      Set your filter criteria and click "Sync Subscribers" to
-                      fetch subscribers from Appstle.
+                      Subscribers will be synced automatically by the cron job every 6 hours.
                     </Text>
                   </EmptyState>
                 )}

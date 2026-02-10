@@ -265,23 +265,66 @@
   // IMPORTANT: Set your app URL here (get this from Shopify Partners > Apps > your app)
   // This should be your app's tunnel URL when developing, or production URL when deployed
   // NOTE: This URL changes each time you restart npm run dev - update it accordingly
-  const APP_URL = 'https://ready-samples-pursuant-lace.trycloudflare.com';
+  // CHANGE_ME: Set this to your deployed app URL (e.g., https://your-app.fly.dev)
+  const APP_URL = 'CHANGE_ME';
 
-  // Get token from URL
+  // Get token or email from URL
   const urlParams = new URLSearchParams(window.location.search);
   giftToken = urlParams.get('token');
+  const giftEmail = urlParams.get('email');
 
   document.addEventListener('DOMContentLoaded', function() {
-    if (!giftToken) {
+    if (giftToken) {
+      // Have a token - verify it and load products
+      verifyAndLoad(`token=${encodeURIComponent(giftToken)}`);
+    } else if (giftEmail) {
+      // Have an email - look up their gift eligibility
+      verifyAndLoad(`email=${encodeURIComponent(giftEmail)}`);
+    } else {
       showError('Invalid gift link. Please use the link from your email.');
       document.getElementById('products-container').style.display = 'none';
       document.getElementById('submit-section').style.display = 'none';
-      return;
     }
-
-    // Load products directly (skip token verification for now - will verify on submit)
-    loadProducts();
   });
+
+  async function verifyAndLoad(queryParam) {
+    try {
+      const verifyResponse = await fetch(`${APP_URL}/api/gift/verify?${queryParam}`);
+      const verifyData = await verifyResponse.json();
+
+      if (!verifyData.valid) {
+        showError(verifyData.message || 'No active gift found. You may have already claimed your gift, or your link has expired.');
+        document.getElementById('products-container').style.display = 'none';
+        document.getElementById('submit-section').style.display = 'none';
+        return;
+      }
+
+      // Set the token from the response (important for email-based lookups)
+      if (verifyData.token) {
+        giftToken = verifyData.token;
+      }
+
+      // Update max gifts from settings
+      if (verifyData.maxGifts) {
+        document.getElementById('max-gifts').textContent = verifyData.maxGifts;
+      }
+
+      // Update header with customer name if available
+      if (verifyData.customerName) {
+        document.querySelector('.gift-header .subtitle').textContent =
+          `Hey ${verifyData.customerName}! Thank you for being a loyal subscriber. Select your free products below.`;
+      }
+
+      // Load products (filtered by eligible IDs if configured)
+      loadProducts(verifyData.eligibleProductIds);
+
+    } catch (error) {
+      console.error('Error verifying gift:', error);
+      showError(`Cannot reach the gift service. Please try again later. (APP_URL: ${APP_URL})`);
+      document.getElementById('products-container').style.display = 'none';
+      document.getElementById('submit-section').style.display = 'none';
+    }
+  }
 
   async function verifyTokenAndLoadProducts() {
     try {
